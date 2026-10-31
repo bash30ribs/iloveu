@@ -71,7 +71,16 @@ body, html {
     display: none;
 }
 
-.hidden-video { display: none !important; }
+.hidden-video {
+    position: fixed;
+    top: -9999px;
+    left: -9999px;
+    width: 640px;
+    height: 480px;
+    opacity: 0;
+    pointer-events: none;
+    z-index: -9999;
+}
 
 /* ══════════════════════════════════════════
    TYPOGRAPHY

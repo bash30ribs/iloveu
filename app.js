@@ -465,6 +465,11 @@ class MemoryBoxTheater {
         this.hasUserPhotos  = false;
         this.lastSmileTime  = 0;
         this.lastFocusedMesh = null;
+        this._lastNavTime = 0;
+        this._lastPinchTime = 0;
+        this._lastPeaceTime = 0;
+        this._lastLoveTime = 0;
+        this._lastScreenshotTime = 0;
 
         this.compliments = [
             '✨ Your smile is absolutely beautiful...',
@@ -1132,16 +1137,25 @@ class MemoryBoxTheater {
         }
 
         this._updateGestureLabel(data.type);
-        this._updateConfidence(90 + Math.random() * 10);
+        this._updateConfidence(data.confidence !== undefined ? data.confidence : 95);
 
-        const mapX = x => -(x - 0.5) * 11;
-        const mapY = y => -(y - 0.5) * 7.5;
+        // Normalized Device Coordinates (NDC) for perspective projection
+        // With mirrored webcam view: mirror X is -(x - 0.5) * 2 and Y is -(y - 0.5) * 2
+        const ndcX = -(data.position.x - 0.5) * 2;
+        const ndcY = -(data.position.y - 0.5) * 2;
+        const ndc = new THREE.Vector2(ndcX, ndcY);
+
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(ndc, this.camera);
+
+        // Place hand marker along ray dynamically in front of camera (always visible at any zoom)
+        const markerDist = Math.max(2.0, Math.min(3.5, this.camera.position.z - 1.0));
+        const targetMarkerPos = raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(markerDist));
 
         // Two hands interaction: zoom/scale
         if (data.type === 'two_hands_zoom') {
             this.handMarker.visible = true;
-            this.handMarker.position.x += (mapX(data.position.x) - this.handMarker.position.x) * 0.5;
-            this.handMarker.position.y += (mapY(data.position.y) - this.handMarker.position.y) * 0.5;
+            this.handMarker.position.lerp(targetMarkerPos, 0.4);
 
             if (data.zoomDelta) {
                 this.camera.position.z -= data.zoomDelta * 6.0;
@@ -1153,34 +1167,38 @@ class MemoryBoxTheater {
         // Two pinch magical scaling
         if (data.type === 'magic_wand') {
             this.handMarker.visible = true;
-            this.handMarker.position.x += (mapX(data.position.x) - this.handMarker.position.x) * 0.5;
-            this.handMarker.position.y += (mapY(data.position.y) - this.handMarker.position.y) * 0.5;
+            this.handMarker.position.lerp(targetMarkerPos, 0.4);
             
-            const dx = mapX(data.position.x) - mapX(data.position2.x);
-            const dy = mapY(data.position.y) - mapY(data.position2.y);
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            const ts = Math.max(0.4, Math.min(dist * 0.3, 2.5));
-            this.carouselGroup.scale.lerp(new THREE.Vector3(ts, ts, ts), 0.1);
+            if (data.position && data.position2) {
+                const dx = (data.position.x - data.position2.x) * 10;
+                const dy = (data.position.y - data.position2.y) * 10;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const ts = Math.max(0.4, Math.min(dist * 0.35, 2.5));
+                this.carouselGroup.scale.lerp(new THREE.Vector3(ts, ts, ts), 0.1);
+            }
             return;
         }
 
         // Single hand cursor move
         this.handMarker.visible = true;
-        const tx = mapX(data.position.x);
-        const ty = mapY(data.position.y);
-        this.handMarker.position.x += (tx - this.handMarker.position.x) * 0.4;
-        this.handMarker.position.y += (ty - this.handMarker.position.y) * 0.4;
-        this.handMarker.position.z  = 5;
-
+        this.handMarker.position.lerp(targetMarkerPos, 0.4);
         this._updateTrail(this.handMarker.position);
 
-        const type = data.type;
+        // Raycast against memory meshes to detect hovered photo directly under cursor
+        const intersects = raycaster.intersectObjects(this.memoryMeshes);
+        if (intersects.length > 0 && !this.focusedMesh) {
+            this.hoveredMesh = intersects[0].object;
+        }
 
-        // If card is zoomed-in
+        const type = data.type;
+        const now = Date.now();
+
+        // ─── FOCUSED CARD MODE ───
         if (this.focusedMesh) {
             if (type === 'open_palm' && (data.deltaX || data.deltaY)) {
                 // Swipe away release
-                if (Math.abs(data.deltaX) > 0.085 || Math.abs(data.deltaY) > 0.085) {
+                if (Math.abs(data.deltaX) > 0.07 || Math.abs(data.deltaY) > 0.07) {
+                    this.focusedMesh.userData.isFlipped = false;
                     this.focusedMesh = null;
                     showToast('Returned photo to box', 'rose');
                     this.audio.pluck(293.66, 0.2); // sweet chime down
@@ -1191,63 +1209,110 @@ class MemoryBoxTheater {
                 this.focusedMesh.position.y -= data.deltaY * 8.0;
             }
             if (type === 'peace') {
-                this.focusedMesh = null;
-                showToast('Put photo back', 'gold');
-                this.audio.pluck(293.66, 0.2);
+                if (now - this._lastPeaceTime > 750) {
+                    this._lastPeaceTime = now;
+                    this.focusedMesh.userData.isFlipped = false;
+                    this.focusedMesh = null;
+                    showToast('Put photo back', 'gold');
+                    this.audio.pluck(293.66, 0.2);
+                }
+                return;
+            }
+            if (type === 'pinch') {
+                if (now - this._lastPinchTime > 750) {
+                    this._lastPinchTime = now;
+                    this.focusedMesh.userData.isFlipped = !this.focusedMesh.userData.isFlipped;
+                    this.audio.pluck(659.25, 0.25);
+                    showToast(this.focusedMesh.userData.isFlipped ? 'Flipped to back of photo 📝' : 'Flipped to front 📸', 'gold');
+                }
+                return;
             }
             if (type === 'thumbs_up' && !this.focusedMesh.userData.liked) {
                 this.focusedMesh.userData.liked = true;
                 this.showLike();
+                return;
+            }
+            if (type === 'ok_sign') {
+                if (now - this._lastScreenshotTime > 1500) {
+                    this._lastScreenshotTime = now;
+                    this.takeScreenshot();
+                }
+                return;
             }
             return;
         }
 
-        // General rotation
+        // ─── BROWSING MODE ───
+
+        // General rotation via Open Palm
         if (type === 'open_palm' && (data.deltaX || data.deltaY)) {
             this.targetRotationY -= data.deltaX * 4.5;
             this.targetRotationX -= data.deltaY * 4.5;
         }
 
-        // Pinch selection
-        if (type === 'pinch' && this.hoveredMesh && !this.focusedMesh) {
-            this.focusedMesh = this.hoveredMesh;
-            this.focusedIndex = this.memoryMeshes.indexOf(this.hoveredMesh);
-            this.audio.pluck(523.25, 0.35); // clear box click-bell
-            showToast('Selected memory card', 'gold');
+        // Pinch selection (debounced)
+        if (type === 'pinch' && !this.focusedMesh) {
+            const meshToSelect = this.hoveredMesh || (intersects.length > 0 ? intersects[0].object : null);
+            if (meshToSelect && (now - this._lastPinchTime > 750)) {
+                this._lastPinchTime = now;
+                this.focusedMesh = meshToSelect;
+                this.focusedMesh.userData.isFlipped = false;
+                this.focusedIndex = this.memoryMeshes.indexOf(meshToSelect);
+                this.audio.pluck(523.25, 0.35); // clear box click-bell
+                showToast('Selected memory card', 'gold');
+            }
         }
 
-        // Next/Prev navigator
+        // Next/Prev navigator (debounced to advance one photo per gesture)
         if (type === 'point_up' && this.memoryMeshes.length > 0) {
-            this.focusedIndex = (this.focusedIndex + 1) % this.memoryMeshes.length;
-            this.focusedMesh = this.memoryMeshes[this.focusedIndex];
-            this.audio.pluck(587.33, 0.22);
-            showToast('Next photo', 'gold');
+            if (now - this._lastNavTime > 650) {
+                this._lastNavTime = now;
+                this.focusedIndex = (this.focusedIndex + 1) % this.memoryMeshes.length;
+                this.focusedMesh = this.memoryMeshes[this.focusedIndex];
+                if (this.focusedMesh) this.focusedMesh.userData.isFlipped = false;
+                this.audio.pluck(587.33, 0.22);
+                showToast('Next photo', 'gold');
+            }
         }
         if (type === 'point_down' && this.memoryMeshes.length > 0) {
-            this.focusedIndex = (this.focusedIndex - 1 + this.memoryMeshes.length) % this.memoryMeshes.length;
-            this.focusedMesh = this.memoryMeshes[this.focusedIndex];
-            this.audio.pluck(392.00, 0.22);
-            showToast('Previous photo', 'gold');
+            if (now - this._lastNavTime > 650) {
+                this._lastNavTime = now;
+                this.focusedIndex = (this.focusedIndex - 1 + this.memoryMeshes.length) % this.memoryMeshes.length;
+                this.focusedMesh = this.memoryMeshes[this.focusedIndex];
+                if (this.focusedMesh) this.focusedMesh.userData.isFlipped = false;
+                this.audio.pluck(392.00, 0.22);
+                showToast('Previous photo', 'gold');
+            }
         }
 
-        // Magical love fanfare
+        // Magical love fanfare (debounced)
         if (type === 'love') {
-            this.triggerExplosion();
+            if (now - this._lastLoveTime > 2000) {
+                this._lastLoveTime = now;
+                this.triggerExplosion();
+            }
         }
 
-        // Fast rotate on thumbs up
+        // OK Sign: Capture screenshot (debounced)
+        if (type === 'ok_sign') {
+            if (now - this._lastScreenshotTime > 1500) {
+                this._lastScreenshotTime = now;
+                this.takeScreenshot();
+            }
+        }
+
+        // Gentle rotate on thumbs up / thumbs down
         if (type === 'thumbs_up') {
-            this.targetRotationY += 0.2;
-            this.audio.pluck(659.25, 0.15);
+            this.targetRotationY += 0.04;
         }
         if (type === 'thumbs_down') {
-            this.targetRotationY -= 0.2;
+            this.targetRotationY -= 0.04;
         }
 
         // Shake camera slightly on shaka
         if (type === 'call_me') {
-            this.camera.position.x = (Math.random() - 0.5) * 0.4;
-            this.camera.position.y = (Math.random() - 0.5) * 0.4;
+            this.camera.position.x = (Math.random() - 0.5) * 0.3;
+            this.camera.position.y = (Math.random() - 0.5) * 0.3;
         } else {
             this.camera.position.x += (0 - this.camera.position.x) * 0.1;
             this.camera.position.y += (0 - this.camera.position.y) * 0.1;
@@ -1488,6 +1553,7 @@ class MemoryBoxTheater {
                 const webcamDisplay = document.getElementById('webcam-display');
                 if (webcamDisplay && videoEl) {
                     webcamDisplay.srcObject = videoEl.srcObject;
+                    webcamDisplay.play().catch(() => {});
                 }
                 
                 showToast('Welcome to our memory box 🕯️', 'gold', 3000);
