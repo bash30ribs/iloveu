@@ -1453,12 +1453,13 @@ class MemoryBoxTheater {
         if ('speechSynthesis' in window) {
             try {
                 window.speechSynthesis.cancel();
+                window.speechSynthesis.resume();
                 // Strip emoji glyphs for natural speech pronunciation
                 const spokenText = compliment.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
                 const utt = new SpeechSynthesisUtterance(spokenText);
                 utt.rate = 0.88;
                 utt.pitch = 1.05;
-                utt.volume = 0.9;
+                utt.volume = 0.95;
 
                 const voices = window.speechSynthesis.getVoices();
                 if (voices.length > 0) {
@@ -1635,8 +1636,9 @@ class MemoryBoxTheater {
                 this.handleGesture.bind(this),
                 (ratio) => {
                     const now = Date.now();
-                    if (now - this.lastSmileTime > 6000) {
+                    if (now - this.lastSmileTime > 4000) {
                         this.lastSmileTime = now;
+                        console.log("😊 Smile detected! Ratio:", ratio);
                         this.showCompliment();
                     }
                 }
@@ -2502,4 +2504,13 @@ class MemoryBoxTheater {
 /* ═══════════════════════════════════════════════════════════
    START PROGRAM
 ═══════════════════════════════════════════════════════════ */
-window.onload = () => { new MemoryBoxTheater(); };
+window.onload = () => {
+    // Pre-warm speech synthesis voices
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.getVoices();
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+            window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+        }
+    }
+    new MemoryBoxTheater();
+};

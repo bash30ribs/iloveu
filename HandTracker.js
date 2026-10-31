@@ -51,7 +51,7 @@ export class HandTracker {
         if (window.FaceMesh && !this.faceMesh) {
             try {
                 this.faceMesh = new window.FaceMesh({
-                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1647461622/${file}`
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`
                 });
                 this.faceMesh.setOptions({
                     maxNumFaces: 1,
@@ -85,6 +85,11 @@ export class HandTracker {
         }
 
         if (!this.faceMesh) {
+            let faceRetries = 0;
+            while (!window.FaceMesh && faceRetries < 25) {
+                await new Promise(r => setTimeout(r, 100));
+                faceRetries++;
+            }
             this._initFaceMesh();
         }
 
@@ -372,15 +377,41 @@ export class HandTracker {
             
             // 61: left mouth corner, 291: right mouth corner
             // 234: left cheek edge, 454: right cheek edge
+            // 33: left eye outer corner, 263: right eye outer corner
+            // 13: upper lip center
             const mouthWidth = this.getDist(face[61], face[291]);
-            const faceWidth = this.getDist(face[234], face[454]);
+            const faceWidth  = this.getDist(face[234], face[454]);
+            const eyeDist    = this.getDist(face[33], face[263]);
             
+            let isSmiling = false;
+            let ratio = 0;
+
             if (faceWidth > 0.001) {
-                const ratio = mouthWidth / faceWidth;
-                // Natural smile threshold (rest is ~0.34-0.37, gentle smile reaches >= 0.395)
-                if (ratio >= 0.395 && this.onSmile) {
-                    this.onSmile(ratio);
+                ratio = mouthWidth / faceWidth;
+                // Ratio test: neutral is ~0.33-0.37. When smiling, ratio reaches >= 0.385
+                if (ratio >= 0.385) {
+                    isSmiling = true;
                 }
+            }
+
+            // Eye distance check (less affected by head tilt/yaw rotation)
+            if (eyeDist > 0.001) {
+                const eyeRatio = mouthWidth / eyeDist;
+                // Neutral is ~0.66-0.73, smiling is >= 0.76
+                if (eyeRatio >= 0.76) {
+                    isSmiling = true;
+                }
+            }
+
+            // Corner lift check: smiling lifts lip corners up towards eyes
+            const avgCornerY = (face[61].y + face[291].y) * 0.5;
+            const lipCenterY = face[13].y;
+            if (faceWidth > 0.001 && (lipCenterY - avgCornerY) > -0.012 && ratio >= 0.375) {
+                isSmiling = true;
+            }
+
+            if (isSmiling && this.onSmile) {
+                this.onSmile(ratio || 0.42);
             }
         }
     }
