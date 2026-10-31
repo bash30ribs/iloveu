@@ -481,13 +481,42 @@ class MemoryBoxTheater {
         this._lastPeaceTime = 0;
         this._lastLoveTime = 0;
         this._lastScreenshotTime = 0;
+        this._lastComplimentIndex = -1;
 
         this.compliments = [
-            '✨ Your smile is absolutely beautiful...',
-            '🌹 How your smile lights up everything...',
-            '🌻 Such a sweet, happy smile...',
-            '💌 Thinking of you and that pretty smile...',
-            '🕯️ Warmest thoughts whenever you smile...'
+            "✨ That smile should come with a warning... it completely derailed my train of thought.",
+            "🌹 You have that quiet kind of beauty that doesn't ask for attention, but commands it anyway.",
+            "🕯️ You smile and suddenly the whole room feels warmer, like candlelight on velvet.",
+            "🍯 Keep smiling like that and I might just fall for you all over again.",
+            "💫 I don't know what kind of magic that was, but your smile just rearranged my whole day.",
+            "📖 There are whole galaxies behind your eyes, and I'm hopelessly lost in them.",
+            "🌧️ You smile and the world feels a little softer, like rainfall on warm earth.",
+            "🎨 If watching you smile was an art form, I'd spend a lifetime in your gallery.",
+            "🌙 You don't even try, do you? Just effortlessly outshining everything around you.",
+            "📜 That subtle curve of your lips has more poetry in it than any book I've ever read.",
+            "💓 I swear every time you smile, my heart skips a beat it never gets back.",
+            "🎶 You have the kind of smile people write love songs about at two in the morning.",
+            "⚖️ Honestly, having you look this breathtaking should probably be against the law.",
+            "⭐ The stars had to dim themselves tonight just to give your smile the spotlight.",
+            "☕ You make being near you feel like drinking warm honey tea on a chilly evening.",
+            "🕊️ The prettiest curve on you will always be that gentle smile.",
+            "📻 Your laughter is my favorite frequency. Never let the world quiet it down.",
+            "💌 You have that rare presence where simply smiling feels like a sweet confession.",
+            "🌻 If I had a flower for every time your smile made my chest ache, I'd walk in gardens forever.",
+            "👑 Are you always this mesmerizing when you're happy, or am I just getting the VIP view?",
+            "🌊 You have no idea how effortlessly you hold my entire focus when you smile like that.",
+            "✨ A single smile from you and everything else in this world just blurs into background noise.",
+            "🏡 You smile and it feels like coming home after a long journey in the rain.",
+            "🧲 I never believed in gravity pulling hearts until I saw that sweet smile of yours.",
+            "👀 The way your eyes crinkle when you smile... that right there is my favorite thing.",
+            "🕯️ You're living proof that the sweetest things in life aren't things—they're moments with you.",
+            "🔒 Careful now... smile like that once more and I won't be able to look away at all.",
+            "✒️ You make ordinary moments feel like private poetry written just for the two of us.",
+            "🕊️ You look the way peace feels. Don't ever stop smiling like that.",
+            "⏳ I could listen to you and watch you smile for hours and still think it wasn't enough time.",
+            "💎 You have a smile that makes people want to be the reason behind it.",
+            "🌹 How do you look so effortlessly gentle and yet hit me with that much impact?",
+            "🪄 That little smile right there? That's my absolute weakness, hands down."
         ];
 
         this.initLights();
@@ -1371,6 +1400,82 @@ class MemoryBoxTheater {
     }
 
     /* ──────────────────────────────────────────
+       SMILE DETECTION & ROMANTIC COMPLIMENTS (WITH RIZZ)
+    ────────────────────────────────────────── */
+    showCompliment() {
+        if (!this.compliments || this.compliments.length === 0) return;
+
+        let index = Math.floor(Math.random() * this.compliments.length);
+        if (index === this._lastComplimentIndex && this.compliments.length > 1) {
+            index = (index + 1) % this.compliments.length;
+        }
+        this._lastComplimentIndex = index;
+        const compliment = this.compliments[index];
+
+        // 1. Play warm chime chord
+        if (this.audio) {
+            this.audio.pluck(523.25, 0.25);
+            setTimeout(() => this.audio.pluck(659.25, 0.3), 120);
+            setTimeout(() => this.audio.pluck(783.99, 0.35), 240);
+        }
+
+        // 2. Heart burst animation
+        const el = document.getElementById('like-burst');
+        if (el) {
+            el.classList.remove('show');
+            void el.offsetWidth;
+            el.classList.add('show');
+        }
+
+        // 3. Update gesture label
+        this._updateGestureLabel('smile');
+        setTimeout(() => {
+            this._updateGestureLabel('—');
+        }, 3200);
+
+        // 4. Show romantic compliment overlay & toast
+        const overlay = document.getElementById('compliment-overlay');
+        const compText = document.getElementById('compliment-text');
+        if (overlay && compText) {
+            compText.textContent = compliment;
+            overlay.style.display = 'block';
+            overlay.style.opacity = '1';
+            overlay.style.transition = 'opacity 0.6s ease';
+            clearTimeout(this._complimentTimer);
+            this._complimentTimer = setTimeout(() => {
+                overlay.style.opacity = '0';
+                setTimeout(() => { overlay.style.display = 'none'; }, 650);
+            }, 4500);
+        }
+        showToast(compliment, 'gold', 6500);
+
+        // 5. Speak warmly via SpeechSynthesis
+        if ('speechSynthesis' in window) {
+            try {
+                window.speechSynthesis.cancel();
+                // Strip emoji glyphs for natural speech pronunciation
+                const spokenText = compliment.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
+                const utt = new SpeechSynthesisUtterance(spokenText);
+                utt.rate = 0.88;
+                utt.pitch = 1.05;
+                utt.volume = 0.9;
+
+                const voices = window.speechSynthesis.getVoices();
+                if (voices.length > 0) {
+                    const naturalVoice = voices.find(v => 
+                        v.lang.startsWith('en') && 
+                        (v.name.includes('Natural') || v.name.includes('Samantha') || v.name.includes('Google UK English Female') || v.name.includes('Google US English') || v.name.includes('Victoria'))
+                    );
+                    if (naturalVoice) utt.voice = naturalVoice;
+                }
+                window.speechSynthesis.speak(utt);
+            } catch (err) {
+                console.warn('Speech synthesis notice:', err);
+            }
+        }
+    }
+
+    /* ──────────────────────────────────────────
        SOFT MAGICAL SPARKLES (Replacing harsh fireworks)
     ────────────────────────────────────────── */
     initFireworks() {
@@ -1468,6 +1573,7 @@ class MemoryBoxTheater {
             'magic_wand':     '🪄 Scaling Album',
             'point_up':       '☝️ Next Polaroid',
             'point_down':     '👇 Previous Polaroid',
+            'smile':          '😊 Smile Detected 💕',
             '—':              '— Ready'
         };
         el.textContent = map[type] || ('🖐 ' + type);
@@ -1672,6 +1778,14 @@ class MemoryBoxTheater {
             if (cameraToggleBtn) {
                 cameraToggleBtn.addEventListener('click', () => {
                     this.toggleCamera();
+                });
+            }
+
+            // Sweet Compliment button
+            const complimentBtn = document.getElementById('compliment-btn');
+            if (complimentBtn) {
+                complimentBtn.addEventListener('click', () => {
+                    this.showCompliment();
                 });
             }
 

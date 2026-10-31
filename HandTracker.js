@@ -27,10 +27,11 @@ export class HandTracker {
         this.stream = null;
 
         this._initHands();
+        this._initFaceMesh();
     }
 
     _initHands() {
-        if (window.Hands) {
+        if (window.Hands && !this.hands) {
             this.hands = new window.Hands({
                 locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
             });
@@ -44,19 +45,24 @@ export class HandTracker {
 
             this.hands.onResults(this.onResults.bind(this));
         }
+    }
 
-        // Initialize FaceMesh for smile detection if available
-        if (window.FaceMesh) {
-            this.faceMesh = new window.FaceMesh({
-                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1647461622/${file}`
-            });
-            this.faceMesh.setOptions({
-                maxNumFaces: 1,
-                refineLandmarks: false,
-                minDetectionConfidence: 0.5,
-                minTrackingConfidence: 0.5
-            });
-            this.faceMesh.onResults(this.onFaceResults.bind(this));
+    _initFaceMesh() {
+        if (window.FaceMesh && !this.faceMesh) {
+            try {
+                this.faceMesh = new window.FaceMesh({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1647461622/${file}`
+                });
+                this.faceMesh.setOptions({
+                    maxNumFaces: 1,
+                    refineLandmarks: false,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                this.faceMesh.onResults(this.onFaceResults.bind(this));
+            } catch (err) {
+                console.warn("FaceMesh init notice:", err);
+            }
         }
     }
 
@@ -76,6 +82,10 @@ export class HandTracker {
                 this._isActive = false;
                 throw new Error("MediaPipe Hands library could not be loaded from CDN.");
             }
+        }
+
+        if (!this.faceMesh) {
+            this._initFaceMesh();
         }
 
         const constraints = {
@@ -120,14 +130,19 @@ export class HandTracker {
             this._lastVideoTime = this.videoElement.currentTime;
             this._isProcessing = true;
             try {
-                await this.hands.send({ image: this.videoElement });
+                if (this.hands) {
+                    await this.hands.send({ image: this.videoElement });
+                }
 
                 this._faceFrameCount++;
-                if (this.faceMesh && this._faceFrameCount % 12 === 0) {
+                if (!this.faceMesh && window.FaceMesh) {
+                    this._initFaceMesh();
+                }
+                if (this.faceMesh && this._faceFrameCount % 6 === 0) {
                     await this.faceMesh.send({ image: this.videoElement });
                 }
             } catch (err) {
-                console.warn("Hands tracking frame send error:", err);
+                console.warn("Tracking frame send error:", err);
             } finally {
                 this._isProcessing = false;
             }
@@ -362,7 +377,8 @@ export class HandTracker {
             
             if (faceWidth > 0.001) {
                 const ratio = mouthWidth / faceWidth;
-                if (ratio > 0.41 && this.onSmile) {
+                // Natural smile threshold (rest is ~0.34-0.37, gentle smile reaches >= 0.395)
+                if (ratio >= 0.395 && this.onSmile) {
                     this.onSmile(ratio);
                 }
             }
