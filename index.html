@@ -85,8 +85,9 @@
             <div class="logo">🌹 Our Memory Box</div>
             <!-- Desktop nav links (hidden on mobile) -->
             <div class="nav-links" id="nav-links-desktop">
-                <button id="nav-create-new-btn" style="background:var(--paper);color:var(--text-dark);font-weight:bold;">✍️ Create Yours</button>
-                <button id="nav-dashboard-btn" style="display:none;">📖 Dashboard</button>
+                <button id="nav-camera-btn" title="Toggle Hand Tracking Camera">📷 Camera: Off</button>
+                <button id="nav-create-new-btn" style="background:var(--paper);color:var(--text-dark);font-weight:bold;">✍️ Create Box</button>
+                <button id="nav-dashboard-btn" style="display:none;">💌 Dashboard</button>
                 <button id="nav-login-btn">Log In</button>
                 <span id="user-greeting" style="display:none;font-size:0.8rem;color:var(--text-muted);"></span>
                 <button id="nav-logout-btn" style="display:none;">Log Out</button>
@@ -96,8 +97,9 @@
         </header>
         <!-- Mobile slide-down drawer -->
         <div id="nav-drawer">
-            <button id="nav-create-new-btn-mob" class="drawer-btn primary-btn">✍️ Create Yours</button>
-            <button id="nav-dashboard-btn-mob" class="drawer-btn" style="display:none;">📖 Dashboard</button>
+            <button id="nav-camera-btn-mob" class="drawer-btn">📷 Camera: Off</button>
+            <button id="nav-create-new-btn-mob" class="drawer-btn primary-btn">✍️ Create Box</button>
+            <button id="nav-dashboard-btn-mob" class="drawer-btn" style="display:none;">💌 Dashboard</button>
             <button id="nav-login-btn-mob" class="drawer-btn">Log In</button>
             <span id="user-greeting-mob" style="display:none;font-size:0.8rem;color:var(--text-muted);padding:8px 0;"></span>
             <button id="nav-logout-btn-mob" class="drawer-btn" style="display:none;">Log Out</button>
@@ -165,8 +167,9 @@
                         <span id="photo-count-num">20</span> memories loaded
                     </div>
                     <input type="file" id="photo-upload" accept="image/*" multiple style="display:none;">
-                    <input type="text" id="target-name-input" placeholder="Who is this for?" style="display:none;width:100%;margin-bottom:8px;">
+                    <input type="text" id="target-name-input" placeholder="💌 Name or username of your lover (e.g. Juliet)" style="display:none;width:100%;margin-bottom:8px;">
                     <div style="display:flex;gap:8px;flex-direction:column;">
+                        <button id="camera-toggle-btn">📷 Hand Camera: Start</button>
                         <button id="add-photo-btn">🌹 Add Photos</button>
                         <button id="share-gallery-btn" style="display:none;">✉️ Create Shareable Box</button>
                         <button id="audio-toggle-btn">🔇 Music Box: Off</button>
@@ -224,25 +227,46 @@
         <button id="close-auth-btn" style="margin-top:12px;background:transparent;border:none;color:var(--text-muted);font-size:0.72rem;cursor:pointer;">Cancel</button>
     </div>
 
-    <!-- ─── CREATOR DASHBOARD MODAL ─── -->
-    <div id="dashboard-modal" class="glass-panel centered" style="display:none;z-index:140;width:92%;max-width:640px;max-height:85vh;overflow-y:auto;text-align:left;">
-        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:10px;margin-bottom:20px;">
-            <h3 style="color:var(--gold);">📖 Your Memory Boxes</h3>
+    <!-- ─── CREATOR & LOVERS DASHBOARD MODAL ─── -->
+    <div id="dashboard-modal" class="glass-panel centered" style="display:none;z-index:140;width:94%;max-width:660px;max-height:85vh;overflow-y:auto;text-align:left;">
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:10px;margin-bottom:16px;">
+            <h3 style="color:var(--gold);margin:0;font-size:1.25rem;">💌 Keepsakes & Love Letters</h3>
             <button id="close-dashboard-btn" style="background:transparent;border:none;color:var(--text-muted);font-size:1.5rem;cursor:pointer;line-height:1;padding:0 5px;">&times;</button>
         </div>
-        
-        <div id="dashboard-empty-state" style="text-align:center;padding:2rem 0;color:var(--text-muted);display:none;">
-            <div style="font-size:3rem;margin-bottom:1rem;">🌹</div>
-            <p>You haven't created any memory boxes yet.</p>
-            <p style="font-size:0.75rem;margin-top:5px;">Click the button below to start creating one!</p>
+
+        <!-- Find lover's box lookup bar -->
+        <div class="dash-search-container" style="display:flex;gap:8px;margin-bottom:16px;">
+            <input type="text" id="dash-search-input" placeholder="🔍 Search lover's username or box code..." style="flex:1;padding:8px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.25);color:#fff;font-size:0.85rem;outline:none;">
+            <button id="dash-search-btn" style="padding:8px 14px;border-radius:6px;background:rgba(212,175,55,0.2);border:1px solid var(--gold);color:var(--gold);font-size:0.8rem;cursor:pointer;">Search</button>
         </div>
         
-        <div id="dashboard-list" style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px;max-height:50vh;overflow-y:auto;">
+        <!-- Lover Tabs -->
+        <div class="dash-tabs" style="display:flex;gap:10px;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:16px;padding-bottom:8px;">
+            <button id="dash-tab-received" class="dash-tab active" style="background:none;border:none;color:var(--gold);font-weight:bold;font-size:0.9rem;cursor:pointer;border-bottom:2px solid var(--gold);padding-bottom:4px;">💌 Made For You</button>
+            <button id="dash-tab-created" class="dash-tab" style="background:none;border:none;color:var(--text-muted);font-size:0.9rem;cursor:pointer;padding-bottom:4px;">🌹 Made By You</button>
+        </div>
+
+        <!-- Received Empty State -->
+        <div id="dashboard-empty-received" style="text-align:center;padding:2rem 0;color:var(--text-muted);display:none;">
+            <div style="font-size:2.8rem;margin-bottom:0.8rem;">💌</div>
+            <p style="margin-bottom:4px;">No love letters addressed to you yet.</p>
+            <p style="font-size:0.75rem;color:var(--gold);">Ask your lover to create a box with your username in the lover name field!</p>
+        </div>
+
+        <!-- Created Empty State -->
+        <div id="dashboard-empty-created" style="text-align:center;padding:2rem 0;color:var(--text-muted);display:none;">
+            <div style="font-size:2.8rem;margin-bottom:0.8rem;">🌹</div>
+            <p>You haven't crafted any memory boxes yet.</p>
+            <p style="font-size:0.75rem;margin-top:5px;">Click the button below to craft a special memory box for your lover!</p>
+        </div>
+        
+        <!-- List container -->
+        <div id="dashboard-list" style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px;max-height:45vh;overflow-y:auto;">
             <!-- Dynamically populated rows -->
         </div>
         
-        <div style="text-align:center;">
-            <button id="dashboard-create-btn" style="background:var(--paper);color:var(--text-dark);font-weight:bold;">Create New Memory Box</button>
+        <div style="text-align:center;border-top:1px solid rgba(255,255,255,0.08);padding-top:14px;">
+            <button id="dashboard-create-btn" style="background:var(--paper);color:var(--text-dark);font-weight:bold;padding:10px 20px;border-radius:6px;border:none;cursor:pointer;">✍️ Craft A New Memory Box</button>
         </div>
     </div>
 

@@ -23,6 +23,7 @@ export class HandTracker {
         this._isActive = false;
         this._isProcessing = false;
         this._animFrameId = null;
+        this._lastVideoTime = -1;
         this.stream = null;
 
         this._initHands();
@@ -108,8 +109,15 @@ export class HandTracker {
     async _processFrame() {
         if (!this._isActive) return;
 
+        // Skip frame if camera has not delivered a new frame yet (throttles to actual camera FPS)
+        if (this.videoElement && this.videoElement.currentTime === this._lastVideoTime) {
+            this._animFrameId = requestAnimationFrame(() => this._processFrame());
+            return;
+        }
+
         // Ensure we don't spam MediaPipe with new frames while a frame is still being processed
         if (!this._isProcessing && this.videoElement && this.videoElement.readyState >= 2) {
+            this._lastVideoTime = this.videoElement.currentTime;
             this._isProcessing = true;
             try {
                 await this.hands.send({ image: this.videoElement });
@@ -128,9 +136,14 @@ export class HandTracker {
         this._animFrameId = requestAnimationFrame(() => this._processFrame());
     }
 
+    isActive() {
+        return this._isActive;
+    }
+
     stop() {
         this._isActive = false;
         this._isProcessing = false;
+        this._lastVideoTime = -1;
         if (this._animFrameId) {
             cancelAnimationFrame(this._animFrameId);
             this._animFrameId = null;
@@ -295,10 +308,12 @@ export class HandTracker {
             if (!this.smoothedPos) {
                 this.smoothedPos = { x: rawPos.x, y: rawPos.y, z: rawPos.z || 0 };
             } else {
-                const alpha = 0.35; // Responsive smoothing factor to remove jitter
-                this.smoothedPos.x += (rawPos.x - this.smoothedPos.x) * alpha;
-                this.smoothedPos.y += (rawPos.y - this.smoothedPos.y) * alpha;
-                this.smoothedPos.z += ((rawPos.z || 0) - this.smoothedPos.z) * alpha;
+                const distMoved = Math.hypot(rawPos.x - this.smoothedPos.x, rawPos.y - this.smoothedPos.y);
+                // Dynamic 1-Euro adaptive filter: heavy smoothing when slow (zero jitter), fast response when moving (zero lag)
+                const dynamicAlpha = Math.min(0.65, Math.max(0.18, distMoved * 10.0));
+                this.smoothedPos.x += (rawPos.x - this.smoothedPos.x) * dynamicAlpha;
+                this.smoothedPos.y += (rawPos.y - this.smoothedPos.y) * dynamicAlpha;
+                this.smoothedPos.z += ((rawPos.z || 0) - this.smoothedPos.z) * dynamicAlpha;
             }
             
             const currentPos = this.smoothedPos;

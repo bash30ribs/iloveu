@@ -451,9 +451,20 @@ class MemoryBoxTheater {
         this.composer.addPass(bloomPass);
 
         this.clock = new THREE.Clock();
-        this.targetRotationY = 0;
-        this.targetRotationX = 0;
-        this.idleTimer = 0;
+        this.rotVelY = 0;
+        this.rotVelX = 0;
+
+        // Reusable scratch variables to avoid GC allocations in render tick
+        this._tmpVec1 = new THREE.Vector3();
+        this._tmpVec2 = new THREE.Vector3();
+        this._tmpTargetPos = new THREE.Vector3();
+        this._tmpCurQ = new THREE.Quaternion();
+        this._tmpTgtQ = new THREE.Quaternion();
+        this._raycaster = new THREE.Raycaster();
+        this._ndc = new THREE.Vector2();
+
+        // Tracker reference
+        this.tracker = null;
 
         this.memoryMeshes = [];
         this.hoveredMesh  = null;
@@ -607,10 +618,14 @@ class MemoryBoxTheater {
             fetch(`/api/share/${shareId}`)
                 .then(r => r.json())
                 .then(data => {
-                    if (data.target_name) {
-                        this.targetName = data.target_name;
+                    if (data.target_name || data.creator_username) {
+                        this.targetName = data.target_name || 'My Love';
+                        const creator = data.creator_username || 'Your Secret Admirer';
                         const q = document.getElementById('love-question');
-                        if (q) q.innerText = `Do you love me, ${data.target_name}?`;
+                        const qSub = document.getElementById('love-question-sub');
+                        if (q) q.innerText = `A memory box for ${this.targetName} 🌹`;
+                        if (qSub) qSub.innerText = `Crafted with deep love by ${creator} • ${data.created_at || 'Forever & always'}`;
+                        showToast(`A love keepsake from ${creator} to ${this.targetName} 💌`, 'gold', 4500);
                     }
                     if (data.images && data.images.length > 0) {
                         data.images.forEach((url, i) => {
@@ -983,15 +998,19 @@ class MemoryBoxTheater {
             this.idleTimer = 0;
         }
 
-        // Apply carousel rotations
+        // Apply carousel rotations with physical inertial momentum
         if (this.carouselGroup && !this.focusedMesh && !this.isExploding) {
-            this.carouselGroup.rotation.y += (this.targetRotationY - this.carouselGroup.rotation.y) * 0.06;
-            this.carouselGroup.rotation.x += (this.targetRotationX - this.carouselGroup.rotation.x) * 0.06;
-            
-            // Add tiny organic float amplitude to each polaroid card
-            this.memoryMeshes.forEach(mesh => {
-                mesh.position.y = mesh.userData.origPos.y + Math.sin(elapsedTime * 0.8 + mesh.userData.floatPhase) * 0.08;
-            });
+            this.targetRotationY += this.rotVelY;
+            this.targetRotationX += this.rotVelX;
+            this.rotVelY *= 0.92;
+            this.rotVelX *= 0.92;
+
+            // Pitch limit to avoid disorientation
+            this.targetRotationX = Math.max(-0.6, Math.min(0.6, this.targetRotationX));
+
+            const damp = Math.min(1.0, delta * 5.0);
+            this.carouselGroup.rotation.y += (this.targetRotationY - this.carouselGroup.rotation.y) * damp;
+            this.carouselGroup.rotation.x += (this.targetRotationX - this.carouselGroup.rotation.x) * damp;
         }
 
         // 3. Blast explosion physics on magical gesture trigger
@@ -1007,19 +1026,16 @@ class MemoryBoxTheater {
             });
         }
 
-        // 4. Polaroid Hover Scale & Focus Lerp
+        // 4. Polaroid Hover Scale & Focus Lerp (Zero-GC)
         if (!this.focusedMesh) {
             let closestMesh = null, closestDist = 3.2;
 
             if (this.handMarker.visible) {
-                const hwp = new THREE.Vector3();
-                this.handMarker.getWorldPosition(hwp);
+                this.handMarker.getWorldPosition(this._tmpVec1);
                 this.memoryMeshes.forEach(mesh => {
-                    const mwp = new THREE.Vector3();
-                    mesh.getWorldPosition(mwp);
-                    
-                    if (mwp.z > 1.5) {
-                        const dist = Math.sqrt((hwp.x - mwp.x)**2 + (hwp.y - mwp.y)**2);
+                    mesh.getWorldPosition(this._tmpVec2);
+                    if (this._tmpVec2.z > 1.5) {
+                        const dist = Math.hypot(this._tmpVec1.x - this._tmpVec2.x, this._tmpVec1.y - this._tmpVec2.y);
                         if (dist < closestDist) {
                             closestDist = dist;
                             closestMesh = mesh;
@@ -1028,45 +1044,53 @@ class MemoryBoxTheater {
                 });
             }
 
-            this.hoveredMesh = closestMesh;
+            if (!this.hoveredMesh || !this.handMarker.visible) {
+                this.hoveredMesh = closestMesh;
+            }
 
             this.memoryMeshes.forEach(mesh => {
                 const isHovered = (mesh === this.hoveredMesh);
                 mesh.userData.targetScale = isHovered ? 1.25 : 1.0;
                 
-                const s = (mesh.userData.targetScale - mesh.scale.x) * 0.1;
+                const s = (mesh.userData.targetScale - mesh.scale.x) * Math.min(1.0, delta * 8.0);
                 mesh.scale.addScalar(s);
                 
-                // Return photo back to placement
-                mesh.position.lerp(mesh.userData.origPos, 0.08);
-                mesh.quaternion.slerp(mesh.userData.origQuat, 0.08);
+                // Harmonized organic floating wave and position return
+                this._tmpTargetPos.copy(mesh.userData.origPos);
+                this._tmpTargetPos.y += Math.sin(elapsedTime * 0.8 + mesh.userData.floatPhase) * 0.08;
+                mesh.position.lerp(this._tmpTargetPos, Math.min(1.0, delta * 5.0));
+                mesh.quaternion.slerp(mesh.userData.origQuat, Math.min(1.0, delta * 5.0));
             });
         } else {
             // Focus Mode: Dim all other cards
             this.memoryMeshes.forEach(mesh => {
                 if (mesh !== this.focusedMesh) {
                     mesh.userData.targetScale = 0.85;
-                    const s = (mesh.userData.targetScale - mesh.scale.x) * 0.1;
+                    const s = (mesh.userData.targetScale - mesh.scale.x) * Math.min(1.0, delta * 6.0);
                     mesh.scale.addScalar(s);
-                    mesh.position.lerp(mesh.userData.origPos, 0.08);
-                    mesh.quaternion.slerp(mesh.userData.origQuat, 0.08);
+                    this._tmpTargetPos.copy(mesh.userData.origPos);
+                    this._tmpTargetPos.y += Math.sin(elapsedTime * 0.8 + mesh.userData.floatPhase) * 0.08;
+                    mesh.position.lerp(this._tmpTargetPos, Math.min(1.0, delta * 5.0));
+                    mesh.quaternion.slerp(mesh.userData.origQuat, Math.min(1.0, delta * 5.0));
                 }
             });
 
-            // Bring focused card smoothly in front of the camera
-            const worldTarget = this.camera.position.clone().add(new THREE.Vector3(0, -0.2, -2.5));
-            const localTarget = this.carouselGroup.worldToLocal(worldTarget);
-            this.focusedMesh.position.lerp(localTarget, 0.1);
+            // Bring focused card smoothly in front of the camera (Zero-GC)
+            this._tmpVec1.copy(this.camera.position).add(new THREE.Vector3(0, -0.2, -2.5));
+            this.carouselGroup.worldToLocal(this._tmpVec1);
+            this.focusedMesh.position.lerp(this._tmpVec1, Math.min(1.0, delta * 6.5));
 
-            const curQ = this.focusedMesh.quaternion.clone();
-            this.focusedMesh.lookAt(this.carouselGroup.worldToLocal(this.camera.position.clone()));
+            this._tmpCurQ.copy(this.focusedMesh.quaternion);
+            this._tmpVec2.copy(this.camera.position);
+            this.carouselGroup.worldToLocal(this._tmpVec2);
+            this.focusedMesh.lookAt(this._tmpVec2);
             if (this.focusedMesh.userData.isFlipped) {
                 this.focusedMesh.rotateY(Math.PI);
             }
-            const tgtQ = this.focusedMesh.quaternion.clone();
-            this.focusedMesh.quaternion.copy(curQ).slerp(tgtQ, 0.1);
+            this._tmpTgtQ.copy(this.focusedMesh.quaternion);
+            this.focusedMesh.quaternion.copy(this._tmpCurQ).slerp(this._tmpTgtQ, Math.min(1.0, delta * 6.5));
 
-            const sc = (2.2 - this.focusedMesh.scale.x) * 0.1;
+            const sc = (2.2 - this.focusedMesh.scale.x) * Math.min(1.0, delta * 6.0);
             this.focusedMesh.scale.addScalar(sc);
         }
 
@@ -1244,10 +1268,12 @@ class MemoryBoxTheater {
 
         // ─── BROWSING MODE ───
 
-        // General rotation via Open Palm
+        // General rotation via Open Palm with inertia
         if (type === 'open_palm' && (data.deltaX || data.deltaY)) {
-            this.targetRotationY -= data.deltaX * 4.5;
-            this.targetRotationX -= data.deltaY * 4.5;
+            this.targetRotationY -= data.deltaX * 3.5;
+            this.targetRotationX -= data.deltaY * 3.5;
+            this.rotVelY = -data.deltaX * 5.0;
+            this.rotVelX = -data.deltaY * 5.0;
         }
 
         // Pinch selection (debounced)
@@ -1459,6 +1485,89 @@ class MemoryBoxTheater {
     }
 
     /* ══════════════════════════════════════════
+       CAMERA & HAND TRACKER TOGGLE
+    ══════════════════════════════════════════ */
+    async toggleCamera() {
+        const videoEl = document.getElementById('input-video');
+        const webcamDisplay = document.getElementById('webcam-display');
+        const cameraToggleBtn = document.getElementById('camera-toggle-btn');
+        const navCameraBtn = document.getElementById('nav-camera-btn');
+        const navCameraBtnMob = document.getElementById('nav-camera-btn-mob');
+        const toggleTechBtn = document.getElementById('toggle-tech-btn');
+
+        const updateCameraButtons = (isActive) => {
+            if (cameraToggleBtn) {
+                cameraToggleBtn.textContent = isActive ? '📷 Hand Camera: Active 🟢' : '📷 Hand Camera: Start';
+                cameraToggleBtn.classList.toggle('camera-active', isActive);
+            }
+            if (navCameraBtn) {
+                navCameraBtn.textContent = isActive ? '📷 Camera On' : '📷 Camera';
+                navCameraBtn.classList.toggle('camera-active', isActive);
+            }
+            if (navCameraBtnMob) {
+                navCameraBtnMob.textContent = isActive ? '📷 Camera: Active 🟢' : '📷 Camera Control';
+                navCameraBtnMob.classList.toggle('camera-active', isActive);
+            }
+            if (toggleTechBtn) {
+                toggleTechBtn.style.display = isActive ? 'inline-block' : 'none';
+            }
+        };
+
+        if (this.tracker && this.tracker.isActive()) {
+            this.tracker.stop();
+            if (webcamDisplay) {
+                webcamDisplay.srcObject = null;
+            }
+            updateCameraButtons(false);
+            showToast('📷 Camera turned off. Touch/Mouse Mode active 📱', 'gold');
+            return false;
+        }
+
+        if (!this.tracker) {
+            this.tracker = new HandTracker(
+                videoEl,
+                this.handleGesture.bind(this),
+                (ratio) => {
+                    const now = Date.now();
+                    if (now - this.lastSmileTime > 6000) {
+                        this.lastSmileTime = now;
+                        this.showCompliment();
+                    }
+                }
+            );
+        }
+
+        try {
+            await this.tracker.start();
+
+            if (webcamDisplay && videoEl) {
+                webcamDisplay.srcObject = videoEl.srcObject;
+                webcamDisplay.play().catch(() => {});
+            }
+
+            updateCameraButtons(true);
+            showToast('📷 Camera connected! Wave or pinch 🌹', 'gold', 3500);
+
+            // If loading screen is still active, dismiss it smoothly
+            const screen = document.getElementById('loading-screen');
+            if (screen && screen.style.display !== 'none') {
+                screen.style.transition = 'opacity 0.8s';
+                screen.style.opacity = '0';
+                setTimeout(() => { screen.style.display = 'none'; }, 820);
+                const cp = document.getElementById('control-panel');
+                if (cp) cp.style.display = 'block';
+            }
+
+            return true;
+        } catch (err) {
+            console.warn('Camera/hand tracking blocked or unavailable. Touch Mode active 📱', err);
+            updateCameraButtons(false);
+            showToast('Camera access blocked. Touch Mode active 📱', 'rose', 4000);
+            return false;
+        }
+    }
+
+    /* ══════════════════════════════════════════
        UI PAGE LIFECYCLE CONTROLS
     ══════════════════════════════════════════ */
     uiSetup() {
@@ -1532,39 +1641,8 @@ class MemoryBoxTheater {
                 statusText.innerText = 'Lighting the candles...';
             }
 
-            const videoEl = document.getElementById('input-video');
-            const tracker = new HandTracker(
-                videoEl,
-                this.handleGesture.bind(this),
-                (ratio) => {
-                    const now = Date.now();
-                    if (now - this.lastSmileTime > 6000) {
-                        this.lastSmileTime = now;
-                        this.showCompliment();
-                    }
-                }
-            );
-
             // Try starting camera and hand tracker
-            try {
-                await tracker.start();
-
-                // Setup webcam alignment feed
-                const webcamDisplay = document.getElementById('webcam-display');
-                if (webcamDisplay && videoEl) {
-                    webcamDisplay.srcObject = videoEl.srcObject;
-                    webcamDisplay.play().catch(() => {});
-                }
-                
-                showToast('Welcome to our memory box 🕯️', 'gold', 3000);
-            } catch (err) {
-                console.warn('Camera/hand tracking blocked or unavailable. Touch Mode active 📱', err);
-                showToast('Camera access blocked. Touch Mode active 📱', 'gold', 4000);
-                
-                // Hide camera alignment gear options as it's not active
-                const toggleTechBtn = document.getElementById('toggle-tech-btn');
-                if (toggleTechBtn) toggleTechBtn.style.display = 'none';
-            }
+            await this.toggleCamera();
 
             // ─── INITIALIZE 3D GRAPHICS & CONTROLS ANYWAY ───
             
@@ -1586,6 +1664,14 @@ class MemoryBoxTheater {
                 minBtn.addEventListener('click', () => {
                     cp.classList.toggle('minimized');
                     minBtn.textContent = cp.classList.contains('minimized') ? '+' : '−';
+                });
+            }
+
+            // Camera toggle button in control panel
+            const cameraToggleBtn = document.getElementById('camera-toggle-btn');
+            if (cameraToggleBtn) {
+                cameraToggleBtn.addEventListener('click', () => {
+                    this.toggleCamera();
                 });
             }
 
@@ -1889,9 +1975,22 @@ class MemoryBoxTheater {
             if (dashboardCreateBtn) {
                 dashboardCreateBtn.addEventListener('click', () => {
                     dashboardModal.style.display = 'none';
-                    if (btnYes.disabled === false) {
+                    const targetNameInp = document.getElementById('target-name-input');
+                    const shareBtn = document.getElementById('share-gallery-btn');
+                    if (targetNameInp) {
+                        targetNameInp.style.display = 'block';
+                        targetNameInp.value = '';
+                        targetNameInp.focus();
+                    }
+                    if (shareBtn) shareBtn.style.display = 'block';
+                    
+                    const navCreateNewBtn = document.getElementById('nav-create-new-btn');
+                    if (navCreateNewBtn) {
+                        navCreateNewBtn.click();
+                    } else if (btnYes && !btnYes.disabled) {
                         btnYes.click();
                     }
+                    showToast('🌹 Type your lover name & add photos to craft your box!', 'gold', 3500);
                 });
             }
 
@@ -1933,8 +2032,10 @@ class MemoryBoxTheater {
             if (navLoginBtnMob) {
                 navLoginBtnMob.addEventListener('click', () => {
                     closeDrawer();
-                    const authModal = document.getElementById('auth-modal');
-                    if (authModal) authModal.style.display = 'flex';
+                    if (authScreen) {
+                        authScreen.style.display = 'block';
+                        authForm.reset();
+                    }
                 });
             }
             if (navLogoutBtnMob) {
@@ -1956,6 +2057,21 @@ class MemoryBoxTheater {
                 });
             }
 
+            // Desktop & Mobile Camera Buttons
+            const navCameraBtn = document.getElementById('nav-camera-btn');
+            if (navCameraBtn) {
+                navCameraBtn.addEventListener('click', () => {
+                    this.toggleCamera();
+                });
+            }
+            const navCameraBtnMob = document.getElementById('nav-camera-btn-mob');
+            if (navCameraBtnMob) {
+                navCameraBtnMob.addEventListener('click', () => {
+                    closeDrawer();
+                    this.toggleCamera();
+                });
+            }
+
             // Check Auth Status on boot
             const checkAuthStatus = async () => {
                 try {
@@ -1970,61 +2086,151 @@ class MemoryBoxTheater {
             };
             checkAuthStatus();
 
-            // Load & Render Dashboard Items
-            const loadDashboard = async () => {
-                try {
-                    const res = await fetch('/api/dashboard');
-                    const data = await res.json();
-                    
-                    if (!dashboardList) return;
-                    dashboardList.innerHTML = '';
-                    
-                    if (!data.shares || data.shares.length === 0) {
-                        if (dashboardEmptyState) dashboardEmptyState.style.display = 'block';
-                        return;
+            // ─── DASHBOARD TABS & SEARCH LOGIC ───
+            let currentDashTab = 'received';
+            let cachedDashboardData = { created_shares: [], received_shares: [] };
+
+            const dashTabReceived = document.getElementById('dash-tab-received');
+            const dashTabCreated = document.getElementById('dash-tab-created');
+            const dashEmptyReceived = document.getElementById('dashboard-empty-received');
+            const dashEmptyCreated = document.getElementById('dashboard-empty-created');
+            const dashSearchInput = document.getElementById('dash-search-input');
+            const dashSearchBtn = document.getElementById('dash-search-btn');
+
+            const setDashTab = (tab) => {
+                currentDashTab = tab;
+                if (dashTabReceived && dashTabCreated) {
+                    if (tab === 'received') {
+                        dashTabReceived.classList.add('active');
+                        dashTabReceived.style.color = 'var(--gold)';
+                        dashTabReceived.style.borderBottom = '2px solid var(--gold)';
+                        dashTabCreated.classList.remove('active');
+                        dashTabCreated.style.color = 'var(--text-muted)';
+                        dashTabCreated.style.borderBottom = 'none';
+                    } else {
+                        dashTabCreated.classList.add('active');
+                        dashTabCreated.style.color = 'var(--gold)';
+                        dashTabCreated.style.borderBottom = '2px solid var(--gold)';
+                        dashTabReceived.classList.remove('active');
+                        dashTabReceived.style.color = 'var(--text-muted)';
+                        dashTabReceived.style.borderBottom = 'none';
                     }
-                    
-                    if (dashboardEmptyState) dashboardEmptyState.style.display = 'none';
-                    data.shares.forEach(share => {
-                        const row = document.createElement('div');
-                        row.className = 'dashboard-item';
-                        
-                        const info = document.createElement('div');
-                        info.className = 'dashboard-item-info';
-                        
-                        const title = document.createElement('div');
-                        title.className = 'dashboard-item-title';
+                }
+                renderDashboardRows();
+            };
+
+            if (dashTabReceived) {
+                dashTabReceived.addEventListener('click', () => setDashTab('received'));
+            }
+            if (dashTabCreated) {
+                dashTabCreated.addEventListener('click', () => setDashTab('created'));
+            }
+
+            const renderDashboardRows = (overrideList = null, isSearchResults = false) => {
+                if (!dashboardList) return;
+                dashboardList.innerHTML = '';
+
+                let items;
+                if (overrideList !== null) {
+                    items = overrideList;
+                } else if (currentDashTab === 'received') {
+                    items = cachedDashboardData.received_shares || [];
+                } else {
+                    items = cachedDashboardData.created_shares || [];
+                }
+
+                if (dashEmptyReceived) dashEmptyReceived.style.display = 'none';
+                if (dashEmptyCreated) dashEmptyCreated.style.display = 'none';
+
+                if (!items || items.length === 0) {
+                    if (isSearchResults) {
+                        const noRes = document.createElement('div');
+                        noRes.style.textAlign = 'center';
+                        noRes.style.padding = '1.8rem 0';
+                        noRes.style.color = 'var(--text-muted)';
+                        noRes.innerHTML = '🔍 No matching love letters found.<br><span style="font-size:0.75rem;color:var(--gold);margin-top:4px;display:inline-block;">Try searching by your lover username or box code.</span>';
+                        dashboardList.appendChild(noRes);
+                    } else if (currentDashTab === 'received') {
+                        if (dashEmptyReceived) dashEmptyReceived.style.display = 'block';
+                    } else {
+                        if (dashEmptyCreated) dashEmptyCreated.style.display = 'block';
+                    }
+                    return;
+                }
+
+                items.forEach(share => {
+                    const row = document.createElement('div');
+                    row.className = 'dashboard-item';
+
+                    const info = document.createElement('div');
+                    info.className = 'dashboard-item-info';
+
+                    const badge = document.createElement('div');
+                    badge.className = 'dashboard-badge-lover';
+
+                    const title = document.createElement('div');
+                    title.className = 'dashboard-item-title';
+
+                    let subtitle = '';
+                    if (isSearchResults) {
+                        badge.textContent = '🔍 Search Match';
+                        title.textContent = share.target_name ? `For: ${share.target_name} 🌹` : 'Anonymous Memory Box 🕯️';
+                        if (share.creator_username) {
+                            subtitle = `Crafted by: ${share.creator_username}`;
+                        }
+                    } else if (currentDashTab === 'received') {
+                        badge.textContent = '💌 Love Letter For You';
+                        title.textContent = `For: ${share.target_name || loggedInUser || 'My Love'} 🌹`;
+                        subtitle = `Crafted with love by: ${share.creator_username || 'Your Secret Admirer'} ❤️`;
+                    } else {
+                        badge.textContent = '🌹 Crafted By You';
                         title.textContent = share.target_name ? `For: ${share.target_name}` : 'Anonymous Memory Box';
-                        
-                        const meta = document.createElement('div');
-                        meta.className = 'dashboard-item-meta';
-                        meta.textContent = `🔗 ID: ${share.id} | 📷 ${share.photo_count} photos`;
-                        
-                        info.appendChild(title);
-                        info.appendChild(meta);
-                        
-                        const actions = document.createElement('div');
-                        actions.className = 'dashboard-item-actions';
-                        
-                        const openBtn = document.createElement('button');
-                        openBtn.className = 'btn-open';
-                        openBtn.textContent = '👁️ Open';
-                        openBtn.onclick = () => {
-                            window.location.search = `?share=${share.id}`;
-                        };
-                        
-                        const copyBtn = document.createElement('button');
-                        copyBtn.className = 'btn-copy';
-                        copyBtn.textContent = '📋 Copy';
-                        copyBtn.onclick = () => {
-                            const link = `${window.location.origin}/?share=${share.id}`;
-                            navigator.clipboard.writeText(link).then(() => {
-                                showToast('Copied link!', 'gold');
-                                copyBtn.textContent = '✅ Copied!';
-                                setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 2000);
-                            });
-                        };
-                        
+                    }
+
+                    const meta = document.createElement('div');
+                    meta.className = 'dashboard-item-meta';
+                    meta.textContent = `🔗 Code: ${share.id} | 📷 ${share.photo_count} photos${share.created_at ? ' | 📅 ' + share.created_at.slice(0, 10) : ''}`;
+
+                    info.appendChild(badge);
+                    info.appendChild(title);
+                    if (subtitle) {
+                        const subEl = document.createElement('div');
+                        subEl.style.fontSize = '0.78rem';
+                        subEl.style.color = 'var(--rose)';
+                        subEl.style.marginTop = '2px';
+                        subEl.textContent = subtitle;
+                        info.appendChild(subEl);
+                    }
+                    info.appendChild(meta);
+
+                    const actions = document.createElement('div');
+                    actions.className = 'dashboard-item-actions';
+
+                    const openBtn = document.createElement('button');
+                    openBtn.className = 'btn-open';
+                    openBtn.textContent = '👁️ Open';
+                    openBtn.onclick = () => {
+                        window.location.search = `?share=${share.id}`;
+                    };
+
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'btn-copy';
+                    copyBtn.textContent = '📋 Copy Link';
+                    copyBtn.onclick = () => {
+                        const link = `${window.location.origin}/?share=${share.id}`;
+                        navigator.clipboard.writeText(link).then(() => {
+                            showToast('Copied link! 💌', 'gold');
+                            copyBtn.textContent = '✅ Copied!';
+                            setTimeout(() => { copyBtn.textContent = '📋 Copy Link'; }, 2000);
+                        });
+                    };
+
+                    actions.appendChild(openBtn);
+                    actions.appendChild(copyBtn);
+
+                    // Allow delete if user is the creator
+                    const isCreator = currentDashTab === 'created' || (share.creator_username && loggedInUser && share.creator_username.toLowerCase() === loggedInUser.toLowerCase());
+                    if (isCreator && !isSearchResults) {
                         const deleteBtn = document.createElement('button');
                         deleteBtn.className = 'btn-delete';
                         deleteBtn.textContent = '🗑️ Delete';
@@ -2037,7 +2243,7 @@ class MemoryBoxTheater {
                                         showToast(delData.error, 'rose');
                                     } else {
                                         showToast('Memory box deleted', 'rose');
-                                        loadDashboard(); // reload
+                                        loadDashboard();
                                     }
                                 } catch (err) {
                                     console.error(err);
@@ -2045,16 +2251,64 @@ class MemoryBoxTheater {
                                 }
                             }
                         };
-                        
-                        actions.appendChild(openBtn);
-                        actions.appendChild(copyBtn);
                         actions.appendChild(deleteBtn);
-                        
-                        row.appendChild(info);
-                        row.appendChild(actions);
-                        
-                        dashboardList.appendChild(row);
-                    });
+                    }
+
+                    row.appendChild(info);
+                    row.appendChild(actions);
+                    dashboardList.appendChild(row);
+                });
+            };
+
+            // Search box lookup
+            if (dashSearchBtn && dashSearchInput) {
+                const handleSearch = async () => {
+                    const query = dashSearchInput.value.trim();
+                    if (!query) {
+                        renderDashboardRows();
+                        return;
+                    }
+                    try {
+                        const res = await fetch(`/api/boxes/find?q=${encodeURIComponent(query)}`);
+                        const data = await res.json();
+                        renderDashboardRows(data.boxes || [], true);
+                        if (data.boxes && data.boxes.length > 0) {
+                            showToast(`Found ${data.boxes.length} memory box(es) 💌`, 'gold');
+                        } else {
+                            showToast('No boxes found for this query', 'rose');
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        showToast('Search failed', 'rose');
+                    }
+                };
+
+                dashSearchBtn.addEventListener('click', handleSearch);
+                dashSearchInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') handleSearch();
+                });
+            }
+
+            // Load & Render Dashboard Items
+            const loadDashboard = async () => {
+                try {
+                    const res = await fetch('/api/dashboard');
+                    if (res.status === 401) {
+                        authScreen.style.display = 'block';
+                        return;
+                    }
+                    const data = await res.json();
+                    cachedDashboardData = {
+                        created_shares: data.created_shares || data.shares || [],
+                        received_shares: data.received_shares || []
+                    };
+                    
+                    // If user has received letters, default to 'received' tab, otherwise 'created'
+                    if (cachedDashboardData.received_shares.length > 0) {
+                        setDashTab('received');
+                    } else {
+                        setDashTab('created');
+                    }
                 } catch (err) {
                     console.error(err);
                     showToast('Failed to load dashboard', 'rose');
@@ -2092,11 +2346,14 @@ class MemoryBoxTheater {
                     const panel = document.getElementById('caption-panel');
                     if (panel) panel.style.display = 'none';
                     
-                    // Hide share inputs
+                    // Show lover inputs
                     const shareBtn = document.getElementById('share-gallery-btn');
                     const targetNameInp = document.getElementById('target-name-input');
-                    if (shareBtn) shareBtn.style.display = 'none';
-                    if (targetNameInp) targetNameInp.style.display = 'none';
+                    if (targetNameInp) {
+                        targetNameInp.style.display = 'block';
+                        targetNameInp.value = '';
+                    }
+                    if (shareBtn) shareBtn.style.display = 'block';
 
                     // Reset greeting/landing text
                     const q = document.getElementById('love-question');
@@ -2109,7 +2366,7 @@ class MemoryBoxTheater {
                     }
                     
                     closeDrawer();
-                    showToast('Started a new memory box! 🕯️', 'gold');
+                    showToast('Started a new memory box! 🕯️ Type lover username & add photos', 'gold', 3500);
                 });
             }
 
