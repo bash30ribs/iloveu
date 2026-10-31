@@ -1969,7 +1969,6 @@ class MemoryBoxTheater {
             const closeDashboardBtn = document.getElementById('close-dashboard-btn');
             const dashboardCreateBtn = document.getElementById('dashboard-create-btn');
             const dashboardList = document.getElementById('dashboard-list');
-            const dashboardEmptyState = document.getElementById('dashboard-empty-state');
             
             let isSignUpMode = false;
             let loggedInUser = null;
