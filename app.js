@@ -150,6 +150,34 @@ class MusicBoxEngine {
         });
     }
 
+    // Wax seal break & love letter opening chime
+    letterOpenChime() {
+        if (!this.enabled) return;
+        this._ensure(); this._resume();
+        const notes = [329.63, 392.00, 493.88, 587.33, 783.99, 987.77];
+        notes.forEach((f, idx) => {
+            this.pluck(f, 0.22, idx * 0.08);
+        });
+    }
+
+    // 3D formation switch chime
+    layoutTransitionSound() {
+        if (!this.enabled) return;
+        this._ensure(); this._resume();
+        const chord = [293.66, 369.99, 440.00, 587.33];
+        chord.forEach((f, idx) => {
+            this.pluck(f, 0.2, idx * 0.06);
+        });
+    }
+
+    // Tour slide advance bell note
+    tourSlideChime() {
+        if (!this.enabled) return;
+        this._ensure(); this._resume();
+        this.pluck(523.25, 0.22, 0);
+        this.pluck(783.99, 0.16, 0.08);
+    }
+
     // Generative wind chime ambient background
     startMelody() {
         this._ensure(); this._resume();
@@ -483,6 +511,20 @@ class MemoryBoxTheater {
         this._lastScreenshotTime = 0;
         this._lastComplimentIndex = -1;
 
+        // 3D Formation, Atmosphere, Tour, and Love Letter state
+        this.currentLayout = 'sphere';
+        this.currentTheme = 'candlelit';
+        this.isTouring = false;
+        this.tourIndex = 0;
+        this.tourPaused = false;
+        this.tourProgress = 0;
+        this.tourSlideDuration = 5500;
+        this.tourStartTime = 0;
+        this.letterText = "";
+        this.creatorUsername = "Your Secret Admirer";
+        this.targetName = "My Love";
+        this.letterDate = "Forever & Always";
+
         this.compliments = [
             "✨ That smile should come with a warning... it completely derailed my train of thought.",
             "🌹 You have that quiet kind of beauty that doesn't ask for attention, but commands it anyway.",
@@ -546,8 +588,8 @@ class MemoryBoxTheater {
     ────────────────────────────────────────── */
     initLights() {
         // Soft warm candlelight ambient
-        const ambientLight = new THREE.AmbientLight(0xfff8e7, 0.7);
-        this.scene.add(ambientLight);
+        this.ambientLight = new THREE.AmbientLight(0xfff8e7, 0.7);
+        this.scene.add(this.ambientLight);
 
         // Directional warm light to give depth shadow to polaroids
         this.dirLight = new THREE.DirectionalLight(0xffeacc, 0.9);
@@ -555,9 +597,9 @@ class MemoryBoxTheater {
         this.scene.add(this.dirLight);
 
         // Additional gold back-light
-        const pointLight = new THREE.PointLight(0xd4af37, 1.2, 20);
-        pointLight.position.set(0, 0, -2);
-        this.scene.add(pointLight);
+        this.pointLight = new THREE.PointLight(0xd4af37, 1.2, 20);
+        this.pointLight.position.set(0, 0, -2);
+        this.scene.add(this.pointLight);
     }
 
     /* ──────────────────────────────────────────
@@ -650,11 +692,20 @@ class MemoryBoxTheater {
                     if (data.target_name || data.creator_username) {
                         this.targetName = data.target_name || 'My Love';
                         const creator = data.creator_username || 'Your Secret Admirer';
+                        this.creatorUsername = creator;
+                        this.letterText = data.letter_text || "";
+                        this.letterDate = data.created_at || "Forever & Always";
                         const q = document.getElementById('love-question');
                         const qSub = document.getElementById('love-question-sub');
                         if (q) q.innerText = `A memory box for ${this.targetName} 🌹`;
                         if (qSub) qSub.innerText = `Crafted with deep love by ${creator} • ${data.created_at || 'Forever & always'}`;
                         showToast(`A love keepsake from ${creator} to ${this.targetName} 💌`, 'gold', 4500);
+
+                        if (data.letter_text) {
+                            setTimeout(() => {
+                                showToast('💌 You have a sealed love letter waiting! Tap "Love Letter" to read it.', 'rose', 6500);
+                            }, 3200);
+                        }
                     }
                     if (data.images && data.images.length > 0) {
                         data.images.forEach((url, i) => {
@@ -743,9 +794,10 @@ class MemoryBoxTheater {
         return mesh;
     }
 
-    // Recalculate photos positions on a wider spherical wall
-    recalculateGlobe() {
+    // ─── 3D FORMATION ALGORITHMS ───
+    calculateSpherePositions() {
         const n = this.memoryMeshes.length;
+        if (n === 0) return;
         const radius = Math.max(6.8, 5.0 + n * 0.08);
 
         for (let i = 0; i < n; i++) {
@@ -755,18 +807,302 @@ class MemoryBoxTheater {
 
             mesh.userData.origPos.set(
                 radius * Math.cos(theta) * Math.sin(phi),
-                radius * Math.cos(phi) * 0.85, // slightly flattened top-bottom
+                radius * Math.cos(phi) * 0.85,
                 radius * Math.sin(theta) * Math.sin(phi)
             );
             mesh.position.copy(mesh.userData.origPos);
             mesh.lookAt(0, 0, 0);
 
-            // Add gentle tilt variation
             mesh.rotateX(mesh.userData.baseTiltX);
             mesh.rotateY(mesh.userData.baseTiltY);
 
             mesh.userData.origQuat.copy(mesh.quaternion);
         }
+    }
+
+    calculateHeartPositions() {
+        const n = this.memoryMeshes.length;
+        if (n === 0) return;
+
+        for (let i = 0; i < n; i++) {
+            const mesh = this.memoryMeshes[i];
+            const t = -Math.PI + (2 * Math.PI * (i + 0.5)) / n;
+
+            const sinT = Math.sin(t);
+            const xHeart = 16 * Math.pow(sinT, 3);
+            const yHeart = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+
+            const scale = 0.28;
+            const x = xHeart * scale;
+            const y = (yHeart - 1.5) * scale;
+            const z = Math.cos(t) * 1.2 + Math.sin(i * 1.8) * 0.4;
+
+            mesh.userData.origPos.set(x, y, z);
+            mesh.position.copy(mesh.userData.origPos);
+            mesh.lookAt(x * 0.15, y * 0.15, 8.5);
+            mesh.rotateX(mesh.userData.baseTiltX * 0.5);
+            mesh.rotateY(mesh.userData.baseTiltY * 0.5);
+            mesh.userData.origQuat.copy(mesh.quaternion);
+        }
+    }
+
+    calculateSpiralPositions() {
+        const n = this.memoryMeshes.length;
+        if (n === 0) return;
+
+        const radius = 5.2;
+        const totalHeight = 8.5;
+
+        for (let i = 0; i < n; i++) {
+            const mesh = this.memoryMeshes[i];
+            const u = n > 1 ? i / (n - 1) : 0.5;
+
+            const y = (u - 0.5) * totalHeight;
+            const theta = u * Math.PI * 5.0;
+
+            const x = radius * Math.cos(theta);
+            const z = radius * Math.sin(theta);
+
+            mesh.userData.origPos.set(x, y, z);
+            mesh.position.copy(mesh.userData.origPos);
+            mesh.lookAt(x * 2.0, y, z * 2.0);
+            mesh.rotateX(mesh.userData.baseTiltX * 0.4);
+            mesh.rotateY(mesh.userData.baseTiltY * 0.4);
+            mesh.userData.origQuat.copy(mesh.quaternion);
+        }
+    }
+
+    applyCurrentLayout() {
+        if (this.currentLayout === 'heart') {
+            this.calculateHeartPositions();
+        } else if (this.currentLayout === 'spiral') {
+            this.calculateSpiralPositions();
+        } else {
+            this.calculateSpherePositions();
+        }
+    }
+
+    setLayout(layoutName) {
+        if (['sphere', 'heart', 'spiral'].indexOf(layoutName) === -1) return;
+        this.currentLayout = layoutName;
+        this.applyCurrentLayout();
+        if (this.audio) this.audio.layoutTransitionSound();
+
+        // Update active class on buttons
+        const layoutBtns = document.querySelectorAll('[data-layout]');
+        layoutBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.layout === layoutName);
+        });
+
+        const mobBtn = document.getElementById('nav-layout-btn-mob');
+        if (mobBtn) {
+            const labelMap = { sphere: 'Sphere Cloud', heart: 'Heart Constellation', spiral: 'Spiral Timeline' };
+            mobBtn.textContent = `🔄 3D Formation: ${labelMap[layoutName] || layoutName}`;
+        }
+
+        const titles = { sphere: 'Spherical Cloud 🌐', heart: 'Romantic Heart 💖', spiral: 'Spiral Timeline 🌀' };
+        showToast(`Arranged in ${titles[layoutName] || layoutName}`, 'gold');
+    }
+
+    recalculateGlobe() {
+        this.applyCurrentLayout();
+    }
+
+    // ─── ATMOSPHERE & MOOD THEMES ───
+    setTheme(themeName) {
+        if (['candlelit', 'midnight', 'sunset', 'vintage'].indexOf(themeName) === -1) return;
+        this.currentTheme = themeName;
+        document.documentElement.setAttribute('data-theme', themeName);
+
+        const themeData = {
+            candlelit: {
+                ambient: 0xfff8e7,
+                dir: 0xffeacc,
+                point: 0xd4af37,
+                bokeh: [0xd4af37, 0xdca2a8],
+                label: 'Candlelit Rose 🕯️',
+                overlay: 'radial-gradient(circle at center, transparent 20%, rgba(13, 11, 18, 0.6) 100%), radial-gradient(circle at 30% 20%, rgba(220, 162, 168, 0.08) 0%, transparent 50%), radial-gradient(circle at 80% 85%, rgba(212, 175, 55, 0.08) 0%, transparent 50%)'
+            },
+            midnight: {
+                ambient: 0x9db8ff,
+                dir: 0x6090ff,
+                point: 0x7fe3ff,
+                bokeh: [0x7fe3ff, 0xcaa6ff],
+                label: 'Starlit Midnight 🌌',
+                overlay: 'radial-gradient(circle at center, transparent 20%, rgba(7, 10, 22, 0.7) 100%), radial-gradient(circle at 30% 20%, rgba(127, 227, 255, 0.1) 0%, transparent 50%), radial-gradient(circle at 80% 85%, rgba(202, 166, 255, 0.1) 0%, transparent 50%)'
+            },
+            sunset: {
+                ambient: 0xffe0c8,
+                dir: 0xff7a59,
+                point: 0xffb84d,
+                bokeh: [0xff7a59, 0xffb84d],
+                label: 'Sunset Glow 🌅',
+                overlay: 'radial-gradient(circle at center, transparent 20%, rgba(23, 11, 19, 0.65) 100%), radial-gradient(circle at 30% 20%, rgba(255, 122, 89, 0.1) 0%, transparent 50%), radial-gradient(circle at 80% 85%, rgba(255, 184, 77, 0.12) 0%, transparent 50%)'
+            },
+            vintage: {
+                ambient: 0xf5ebd7,
+                dir: 0xe0cbaf,
+                point: 0xc9a063,
+                bokeh: [0xc9a063, 0xa88267],
+                label: 'Vintage Sepia 📜',
+                overlay: 'radial-gradient(circle at center, transparent 20%, rgba(18, 14, 10, 0.7) 100%), radial-gradient(circle at 30% 20%, rgba(201, 160, 99, 0.1) 0%, transparent 50%), radial-gradient(circle at 80% 85%, rgba(168, 130, 103, 0.1) 0%, transparent 50%)'
+            }
+        };
+
+        const t = themeData[themeName];
+        if (t) {
+            if (this.ambientLight) this.ambientLight.color.setHex(t.ambient);
+            if (this.dirLight) this.dirLight.color.setHex(t.dir);
+            if (this.pointLight) this.pointLight.color.setHex(t.point);
+
+            if (this.bokehGroup) {
+                this.bokehGroup.children.forEach((mesh, idx) => {
+                    const c = t.bokeh[idx % t.bokeh.length];
+                    if (mesh.material) mesh.material.color.setHex(c);
+                });
+            }
+
+            const bgOverlay = document.getElementById('bg-overlay');
+            if (bgOverlay) bgOverlay.style.background = t.overlay;
+
+            const themeBtns = document.querySelectorAll('[data-theme]');
+            themeBtns.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.theme === themeName);
+            });
+
+            const navThemeBtn = document.getElementById('nav-theme-btn');
+            if (navThemeBtn) navThemeBtn.textContent = `🎨 ${themeName.charAt(0).toUpperCase() + themeName.slice(1)}`;
+            const navThemeMob = document.getElementById('nav-theme-btn-mob');
+            if (navThemeMob) navThemeMob.textContent = `🎨 Mood: ${t.label}`;
+
+            if (this.audio) this.audio.pluck(587.33, 0.2);
+            showToast(`Atmosphere: ${t.label}`, 'gold');
+        }
+    }
+
+    // ─── CINEMATIC MEMORY TOUR ───
+    startTour() {
+        if (!this.memoryMeshes.length) return;
+        this.isTouring = true;
+        this.tourPaused = false;
+        this.tourStartTime = Date.now();
+        if (this.tourIndex < 0 || this.tourIndex >= this.memoryMeshes.length) {
+            this.tourIndex = 0;
+        }
+
+        const hud = document.getElementById('tour-hud');
+        if (hud) hud.style.display = 'flex';
+
+        const pauseBtn = document.getElementById('tour-pause-btn');
+        if (pauseBtn) pauseBtn.textContent = '⏸';
+
+        this.focusTourMemory(this.tourIndex);
+        showToast('Starting Cinematic Memory Tour ✨', 'gold');
+    }
+
+    focusTourMemory(index) {
+        if (index < 0 || index >= this.memoryMeshes.length) return;
+        this.tourIndex = index;
+        this.tourStartTime = Date.now();
+        const mesh = this.memoryMeshes[index];
+        this.focusedMesh = mesh;
+        this.focusedIndex = index;
+
+        const counter = document.getElementById('tour-hud-counter');
+        const title = document.getElementById('tour-hud-title');
+        const progressFill = document.getElementById('tour-progress-fill');
+        if (counter) counter.textContent = `Memory ${index + 1} of ${this.memoryMeshes.length}`;
+        if (title) title.textContent = mesh.userData.caption || `Memory #${index + 1}`;
+        if (progressFill) progressFill.style.width = '0%';
+
+        if (this.audio) this.audio.tourSlideChime();
+    }
+
+    nextTourSlide() {
+        if (!this.memoryMeshes.length) return;
+        const nextIdx = (this.tourIndex + 1) % this.memoryMeshes.length;
+        this.focusTourMemory(nextIdx);
+    }
+
+    prevTourSlide() {
+        if (!this.memoryMeshes.length) return;
+        const prevIdx = (this.tourIndex - 1 + this.memoryMeshes.length) % this.memoryMeshes.length;
+        this.focusTourMemory(prevIdx);
+    }
+
+    togglePauseTour() {
+        this.tourPaused = !this.tourPaused;
+        const pauseBtn = document.getElementById('tour-pause-btn');
+        if (pauseBtn) pauseBtn.textContent = this.tourPaused ? '▶️' : '⏸';
+        if (!this.tourPaused) {
+            this.tourStartTime = Date.now() - (this.tourProgress * this.tourSlideDuration);
+        }
+        showToast(this.tourPaused ? 'Tour paused' : 'Tour resumed', 'gold');
+    }
+
+    stopTour() {
+        this.isTouring = false;
+        this.tourPaused = false;
+        const hud = document.getElementById('tour-hud');
+        if (hud) hud.style.display = 'none';
+        this.focusedMesh = null;
+        this.focusedIndex = -1;
+        showToast('Exited Cinematic Tour', 'rose');
+    }
+
+    // ─── WAX-SEALED LOVE LETTER MODAL ───
+    openLoveLetterModal() {
+        const modal = document.getElementById('love-letter-modal');
+        const sealedView = document.getElementById('letter-sealed-view');
+        const unfoldedView = document.getElementById('letter-unfolded-view');
+        const editView = document.getElementById('letter-edit-view');
+        const flap = document.querySelector('.envelope-flap');
+
+        if (!modal) return;
+
+        if (sealedView) sealedView.style.display = 'block';
+        if (unfoldedView) unfoldedView.style.display = 'none';
+        if (editView) editView.style.display = 'none';
+        if (flap) flap.style.transform = 'none';
+
+        const recEl = document.getElementById('letter-recipient-name');
+        const authEl = document.getElementById('letter-author-name');
+        if (recEl) recEl.textContent = this.targetName || 'My Love';
+        if (authEl) authEl.textContent = this.creatorUsername || 'Your Secret Admirer';
+
+        modal.style.display = 'block';
+    }
+
+    breakWaxSeal() {
+        const flap = document.querySelector('.envelope-flap');
+        const sealedView = document.getElementById('letter-sealed-view');
+        const unfoldedView = document.getElementById('letter-unfolded-view');
+
+        if (this.audio) this.audio.letterOpenChime();
+
+        if (flap) flap.style.transform = 'rotateX(180deg)';
+
+        setTimeout(() => {
+            if (sealedView) sealedView.style.display = 'none';
+            if (unfoldedView) unfoldedView.style.display = 'block';
+
+            const dateEl = document.getElementById('letter-view-date');
+            const salEl = document.getElementById('letter-view-salutation');
+            const bodyEl = document.getElementById('letter-view-body');
+            const signEl = document.getElementById('letter-view-signoff');
+
+            if (dateEl) dateEl.textContent = this.letterDate || 'Forever & Always';
+            if (salEl) salEl.textContent = `Dearest ${this.targetName || 'One'},`;
+
+            const defaultLetter = "Every moment with you feels like catching starlight in a jar. Through every laugh, every quiet evening, and every step along our path, you make ordinary days feel extraordinary.\n\nThank you for being my favorite memory, today and every tomorrow.";
+            const rawBody = (this.letterText && this.letterText.trim()) ? this.letterText : defaultLetter;
+            if (bodyEl) bodyEl.innerHTML = rawBody.replace(/\n/g, '<br>');
+
+            if (signEl) signEl.textContent = `With all my heart, ${this.creatorUsername || 'Your Secret Admirer'} ❤️`;
+
+            const editBtn = document.getElementById('letter-edit-btn');
+            if (editBtn) editBtn.style.display = 'inline-block';
+        }, 550);
     }
 
     // Rebuild texture when caption text gets updated
@@ -1139,6 +1475,18 @@ class MemoryBoxTheater {
                 if (panel) panel.style.display = 'none';
             }
             this.lastFocusedMesh = this.focusedMesh;
+        }
+
+        // 6. Tour slide progress timer
+        if (this.isTouring && !this.tourPaused) {
+            const elapsedSlide = Date.now() - this.tourStartTime;
+            this.tourProgress = Math.min(1.0, elapsedSlide / this.tourSlideDuration);
+            const fill = document.getElementById('tour-progress-fill');
+            if (fill) fill.style.width = `${(this.tourProgress * 100).toFixed(1)}%`;
+
+            if (this.tourProgress >= 1.0) {
+                this.nextTourSlide();
+            }
         }
 
         this.composer.render();
@@ -1862,6 +2210,8 @@ class MemoryBoxTheater {
 
                     if (shareBtn) shareBtn.style.display = 'block';
                     if (targetNameInp) targetNameInp.style.display = 'block';
+                    const letterTextInp = document.getElementById('letter-text-input');
+                    if (letterTextInp) letterTextInp.style.display = 'block';
                     showToast(`Added ${files.length} photo prints`, 'rose');
                 });
             }
@@ -1911,6 +2261,12 @@ class MemoryBoxTheater {
                     this.pendingUploads.forEach(f => fd.append('photos', f));
                     if (targetNameInp && targetNameInp.value.trim()) {
                         fd.append('target_name', targetNameInp.value.trim());
+                    }
+                    const letterTextInp = document.getElementById('letter-text-input');
+                    if (letterTextInp && letterTextInp.value.trim()) {
+                        fd.append('letter_text', letterTextInp.value.trim());
+                    } else if (this.letterText && this.letterText.trim()) {
+                        fd.append('letter_text', this.letterText.trim());
                     }
 
                     try {
@@ -2091,11 +2447,16 @@ class MemoryBoxTheater {
                 dashboardCreateBtn.addEventListener('click', () => {
                     dashboardModal.style.display = 'none';
                     const targetNameInp = document.getElementById('target-name-input');
+                    const letterTextInp = document.getElementById('letter-text-input');
                     const shareBtn = document.getElementById('share-gallery-btn');
                     if (targetNameInp) {
                         targetNameInp.style.display = 'block';
                         targetNameInp.value = '';
                         targetNameInp.focus();
+                    }
+                    if (letterTextInp) {
+                        letterTextInp.style.display = 'block';
+                        letterTextInp.value = '';
                     }
                     if (shareBtn) shareBtn.style.display = 'block';
                     
@@ -2464,9 +2825,14 @@ class MemoryBoxTheater {
                     // Show lover inputs
                     const shareBtn = document.getElementById('share-gallery-btn');
                     const targetNameInp = document.getElementById('target-name-input');
+                    const letterTextInp = document.getElementById('letter-text-input');
                     if (targetNameInp) {
                         targetNameInp.style.display = 'block';
                         targetNameInp.value = '';
+                    }
+                    if (letterTextInp) {
+                        letterTextInp.style.display = 'block';
+                        letterTextInp.value = '';
                     }
                     if (shareBtn) shareBtn.style.display = 'block';
 
@@ -2494,6 +2860,184 @@ class MemoryBoxTheater {
                     closeDrawer();
                 });
             }
+
+            // ─── 3D FORMATION SWITCHER EVENT HANDLERS ───
+            document.querySelectorAll('[data-layout]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.setLayout(btn.dataset.layout);
+                });
+            });
+
+            const navLayoutBtnMob = document.getElementById('nav-layout-btn-mob');
+            if (navLayoutBtnMob) {
+                navLayoutBtnMob.addEventListener('click', () => {
+                    const layouts = ['sphere', 'heart', 'spiral'];
+                    const nextIdx = (layouts.indexOf(this.currentLayout) + 1) % layouts.length;
+                    this.setLayout(layouts[nextIdx]);
+                });
+            }
+
+            // ─── ATMOSPHERE & MOOD THEMES EVENT HANDLERS ───
+            document.querySelectorAll('[data-theme]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.setTheme(btn.dataset.theme);
+                });
+            });
+
+            const cycleTheme = () => {
+                const themes = ['candlelit', 'midnight', 'sunset', 'vintage'];
+                const nextIdx = (themes.indexOf(this.currentTheme) + 1) % themes.length;
+                this.setTheme(themes[nextIdx]);
+            };
+
+            const navThemeBtn = document.getElementById('nav-theme-btn');
+            if (navThemeBtn) navThemeBtn.addEventListener('click', cycleTheme);
+            const navThemeBtnMob = document.getElementById('nav-theme-btn-mob');
+            if (navThemeBtnMob) navThemeBtnMob.addEventListener('click', cycleTheme);
+
+            // ─── CINEMATIC MEMORY TOUR EVENT HANDLERS ───
+            const triggerTour = () => {
+                closeDrawer();
+                const loadingScreen = document.getElementById('loading-screen');
+                if (loadingScreen && loadingScreen.style.display !== 'none' && btnYes && !btnYes.disabled) {
+                    btnYes.click();
+                }
+                this.startTour();
+            };
+
+            const navTourBtn = document.getElementById('nav-tour-btn');
+            if (navTourBtn) navTourBtn.addEventListener('click', triggerTour);
+            const navTourBtnMob = document.getElementById('nav-tour-btn-mob');
+            if (navTourBtnMob) navTourBtnMob.addEventListener('click', triggerTour);
+            const tourPanelBtn = document.getElementById('tour-panel-btn');
+            if (tourPanelBtn) tourPanelBtn.addEventListener('click', triggerTour);
+
+            const tourPrevBtn = document.getElementById('tour-prev-btn');
+            if (tourPrevBtn) tourPrevBtn.addEventListener('click', () => this.prevTourSlide());
+            const tourNextBtn = document.getElementById('tour-next-btn');
+            if (tourNextBtn) tourNextBtn.addEventListener('click', () => this.nextTourSlide());
+            const tourPauseBtn = document.getElementById('tour-pause-btn');
+            if (tourPauseBtn) tourPauseBtn.addEventListener('click', () => this.togglePauseTour());
+            const tourExitBtn = document.getElementById('tour-exit-btn');
+            if (tourExitBtn) tourExitBtn.addEventListener('click', () => this.stopTour());
+
+            // ─── WAX-SEALED LOVE LETTER EVENT HANDLERS ───
+            const triggerLetter = () => {
+                closeDrawer();
+                this.openLoveLetterModal();
+            };
+
+            const navLetterBtn = document.getElementById('nav-letter-btn');
+            if (navLetterBtn) navLetterBtn.addEventListener('click', triggerLetter);
+            const navLetterBtnMob = document.getElementById('nav-letter-btn-mob');
+            if (navLetterBtnMob) navLetterBtnMob.addEventListener('click', triggerLetter);
+            const letterPanelBtn = document.getElementById('letter-panel-btn');
+            if (letterPanelBtn) letterPanelBtn.addEventListener('click', triggerLetter);
+
+            const waxSealBtn = document.getElementById('wax-seal-btn');
+            if (waxSealBtn) waxSealBtn.addEventListener('click', () => this.breakWaxSeal());
+
+            const closeLetterModalBtn = document.getElementById('close-letter-modal-btn');
+            const loveLetterModal = document.getElementById('love-letter-modal');
+            if (closeLetterModalBtn && loveLetterModal) {
+                closeLetterModalBtn.addEventListener('click', () => { loveLetterModal.style.display = 'none'; });
+            }
+
+            const letterResealBtn = document.getElementById('letter-reseal-btn');
+            if (letterResealBtn && loveLetterModal) {
+                letterResealBtn.addEventListener('click', () => {
+                    loveLetterModal.style.display = 'none';
+                    showToast('Folded and sealed letter away ✉️', 'gold');
+                });
+            }
+
+            const letterCopyBtn = document.getElementById('letter-copy-btn');
+            if (letterCopyBtn) {
+                letterCopyBtn.addEventListener('click', () => {
+                    const bodyEl = document.getElementById('letter-view-body');
+                    if (bodyEl) {
+                        navigator.clipboard.writeText(bodyEl.innerText).then(() => {
+                            showToast('Copied love letter! 💌', 'gold');
+                            letterCopyBtn.textContent = '✅ Copied!';
+                            setTimeout(() => { letterCopyBtn.textContent = '📋 Copy Letter'; }, 2000);
+                        });
+                    }
+                });
+            }
+
+            // Letter Editor within Modal
+            const letterEditBtn = document.getElementById('letter-edit-btn');
+            const letterEditView = document.getElementById('letter-edit-view');
+            const letterUnfoldedView = document.getElementById('letter-unfolded-view');
+            const letterEditorInput = document.getElementById('letter-editor-input');
+            const letterEditorCancel = document.getElementById('letter-editor-cancel-btn');
+            const letterEditorSave = document.getElementById('letter-editor-save-btn');
+
+            if (letterEditBtn && letterEditView && letterUnfoldedView && letterEditorInput) {
+                letterEditBtn.addEventListener('click', () => {
+                    letterUnfoldedView.style.display = 'none';
+                    letterEditView.style.display = 'block';
+                    letterEditorInput.value = this.letterText || "Every moment with you feels like catching starlight in a jar. Through every laugh, every quiet evening, and every step along our path, you make ordinary days feel extraordinary.\n\nThank you for being my favorite memory, today and every tomorrow.";
+                    letterEditorInput.focus();
+                });
+
+                if (letterEditorCancel) {
+                    letterEditorCancel.addEventListener('click', () => {
+                        letterEditView.style.display = 'none';
+                        letterUnfoldedView.style.display = 'block';
+                    });
+                }
+
+                if (letterEditorSave) {
+                    letterEditorSave.addEventListener('click', () => {
+                        this.letterText = letterEditorInput.value.trim();
+                        const letterTextInp = document.getElementById('letter-text-input');
+                        if (letterTextInp) letterTextInp.value = this.letterText;
+                        
+                        const bodyEl = document.getElementById('letter-view-body');
+                        if (bodyEl) bodyEl.innerHTML = this.letterText.replace(/\n/g, '<br>');
+
+                        letterEditView.style.display = 'none';
+                        letterUnfoldedView.style.display = 'block';
+                        showToast('Saved your love letter! 💌', 'gold');
+                    });
+                }
+            }
+
+            // ─── KEYBOARD SHORTCUTS ───
+            window.addEventListener('keydown', (e) => {
+                const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+                if (tag === 'input' || tag === 'textarea') return;
+
+                if (e.key === 't' || e.key === 'T') {
+                    if (this.isTouring) this.stopTour();
+                    else triggerTour();
+                } else if (e.key === 'l' || e.key === 'L') {
+                    const layouts = ['sphere', 'heart', 'spiral'];
+                    const nextIdx = (layouts.indexOf(this.currentLayout) + 1) % layouts.length;
+                    this.setLayout(layouts[nextIdx]);
+                } else if (e.key === 'm' || e.key === 'M') {
+                    cycleTheme();
+                } else if (e.key === ' ') {
+                    e.preventDefault();
+                    if (this.isTouring) {
+                        this.togglePauseTour();
+                    } else if (this.focusedMesh) {
+                        this.focusedMesh.userData.isFlipped = !this.focusedMesh.userData.isFlipped;
+                        if (this.audio) this.audio.pluck(659.25, 0.25);
+                        showToast(this.focusedMesh.userData.isFlipped ? 'Flipped to back of photo 📝' : 'Flipped to front 📸', 'gold');
+                    }
+                } else if (e.key === 'Escape') {
+                    if (this.isTouring) this.stopTour();
+                    if (loveLetterModal) loveLetterModal.style.display = 'none';
+                    const shareModal = document.getElementById('share-modal');
+                    if (shareModal) shareModal.style.display = 'none';
+                    const authScreen = document.getElementById('auth-screen');
+                    if (authScreen) authScreen.style.display = 'none';
+                    const dashModal = document.getElementById('dashboard-modal');
+                    if (dashModal) dashModal.style.display = 'none';
+                }
+            });
         };
 
         btnYes.addEventListener('click', handleYes);

@@ -77,6 +77,10 @@ def init_local_db():
             c.execute('ALTER TABLE shares ADD COLUMN created_at TEXT')
         except sqlite3.OperationalError:
             pass
+        try:
+            c.execute('ALTER TABLE shares ADD COLUMN letter_text TEXT')
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         conn.close()
 
@@ -229,7 +233,7 @@ def get_dashboard():
     else:
         conn = sqlite3.connect('database.sqlite')
         c = conn.cursor()
-        c.execute('SELECT id, images, target_name, creator_username, created_at FROM shares WHERE user_id = ? ORDER BY rowid DESC', (user_id,))
+        c.execute('SELECT id, images, target_name, creator_username, created_at, letter_text FROM shares WHERE user_id = ? ORDER BY rowid DESC', (user_id,))
         rows = c.fetchall()
         for row in rows:
             created_shares.append({
@@ -237,12 +241,13 @@ def get_dashboard():
                 'images': row[1] or '',
                 'target_name': row[2] or 'My Love',
                 'creator_username': row[3] or username,
-                'created_at': row[4] or ''
+                'created_at': row[4] or '',
+                'letter_text': row[5] or ''
             })
 
         if username:
             c.execute('''
-                SELECT id, images, target_name, creator_username, created_at 
+                SELECT id, images, target_name, creator_username, created_at, letter_text 
                 FROM shares 
                 WHERE LOWER(target_name) = ? AND (user_id IS NULL OR user_id != ?) 
                 ORDER BY rowid DESC
@@ -254,7 +259,8 @@ def get_dashboard():
                     'images': row[1] or '',
                     'target_name': row[2] or 'My Love',
                     'creator_username': row[3] or 'A Secret Admirer',
-                    'created_at': row[4] or ''
+                    'created_at': row[4] or '',
+                    'letter_text': row[5] or ''
                 })
         conn.close()
 
@@ -283,7 +289,7 @@ def find_boxes():
     conn = sqlite3.connect('database.sqlite')
     c = conn.cursor()
     c.execute('''
-        SELECT id, images, target_name, creator_username, created_at
+        SELECT id, images, target_name, creator_username, created_at, letter_text
         FROM shares
         WHERE LOWER(id) = ? OR LOWER(creator_username) = ? OR LOWER(target_name) = ?
         ORDER BY rowid DESC LIMIT 15
@@ -300,6 +306,7 @@ def find_boxes():
             'target_name': r[2] or 'My Love',
             'creator_username': r[3] or 'A Secret Admirer',
             'created_at': r[4] or '',
+            'letter_text': r[5] or '',
             'link': f"/?share={r[0]}"
         })
     return jsonify({'boxes': boxes})
@@ -358,6 +365,7 @@ def upload_files():
     files = request.files.getlist('photos')
     share_id = generate_share_id()
     target_name = request.form.get('target_name', '')
+    letter_text = request.form.get('letter_text', '')
     user_id = session.get('user_id') # Link to logged-in user if available
 
     saved_images = []
@@ -400,7 +408,8 @@ def upload_files():
                 'target_name': target_name,
                 'user_id': user_id,
                 'creator_username': creator_username,
-                'created_at': created_at
+                'created_at': created_at,
+                'letter_text': letter_text
             }).execute()
         except Exception as e:
             print("Failed to save share metadata in Supabase DB:", e)
@@ -424,8 +433,8 @@ def upload_files():
 
         conn = sqlite3.connect('database.sqlite')
         c = conn.cursor()
-        c.execute('INSERT INTO shares (id, images, target_name, user_id, creator_username, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-                  (share_id, images_str, target_name, user_id, creator_username, created_at))
+        c.execute('INSERT INTO shares (id, images, target_name, user_id, creator_username, created_at, letter_text) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                  (share_id, images_str, target_name, user_id, creator_username, created_at, letter_text))
         conn.commit()
         conn.close()
 
@@ -436,18 +445,20 @@ def upload_files():
 def get_share(share_id):
     if supabase_client:
         try:
-            res = supabase_client.table('shares').select('images, target_name, creator_username, created_at').eq('id', share_id).execute()
+            res = supabase_client.table('shares').select('images, target_name, creator_username, created_at, letter_text').eq('id', share_id).execute()
             rows = getattr(res, 'data', [])
             if rows:
                 images = rows[0]['images'].split(',')
                 target_name = rows[0].get('target_name') or 'My Love'
                 creator_username = rows[0].get('creator_username') or 'Your Secret Admirer'
                 created_at = rows[0].get('created_at') or ''
+                letter_text = rows[0].get('letter_text') or ''
                 return jsonify({
                     'images': images,
                     'target_name': target_name,
                     'creator_username': creator_username,
-                    'created_at': created_at
+                    'created_at': created_at,
+                    'letter_text': letter_text
                 })
             else:
                 return jsonify({'error': 'Share not found in Supabase'}), 404
@@ -457,7 +468,7 @@ def get_share(share_id):
     else:
         conn = sqlite3.connect('database.sqlite')
         c = conn.cursor()
-        c.execute('SELECT images, target_name, creator_username, created_at FROM shares WHERE id = ?', (share_id,))
+        c.execute('SELECT images, target_name, creator_username, created_at, letter_text FROM shares WHERE id = ?', (share_id,))
         row = c.fetchone()
         conn.close()
 
@@ -466,12 +477,14 @@ def get_share(share_id):
             target_name      = row[1] or 'My Love'
             creator_username = row[2] or 'Your Secret Admirer'
             created_at       = row[3] or ''
+            letter_text      = row[4] or ''
             image_urls       = [f"/uploads/{img}" for img in images]
             return jsonify({
                 'images': image_urls,
                 'target_name': target_name,
                 'creator_username': creator_username,
-                'created_at': created_at
+                'created_at': created_at,
+                'letter_text': letter_text
             })
         else:
             return jsonify({'error': 'Share not found locally'}), 404
